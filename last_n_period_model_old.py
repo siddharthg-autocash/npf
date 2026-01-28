@@ -1,4 +1,5 @@
 # last_n_forecast_sma_wma.py
+
 """
 Simplified last-n forecasting module focused only on:
  - Simple Moving Average (SMA)
