@@ -2,102 +2,118 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import timedelta
-# IMPORT YOUR BACKEND
 import last_n_period_model as backend
 
-st.set_page_config(page_title="forecats", layout="wide")
+st.set_page_config(page_title="Forecasting Project", layout="wide")
 
-# Standard Holidays
-HOLIDAY_DATES = [
+# Configuration constants
+HOLIDAYS = [
     "2025-01-01", "2025-01-20", "2025-05-26", "2025-06-19",
     "2025-07-04", "2025-09-01", "2025-11-11", "2025-11-27", 
     "2025-12-25", "2026-01-01", "2026-01-19"
 ]
 
-def parse_input(raw_text):
-    data = []
-    for line in raw_text.split('\n'):
+def parse_input_data(text):
+    rows = []
+    for line in text.split('\n'):
         parts = line.strip().split()
-        if len(parts) >= 2 and parts[0][0].isdigit():
-            data.append([parts[0], parts[-1]])
-    if not data: return pd.DataFrame()
-    df = pd.DataFrame(data, columns=["date", "amount"])
-    df["date"] = pd.to_datetime(df["date"])
-    df["amount"] = pd.to_numeric(df["amount"])
-    return df.sort_values("date")
+        if len(parts) >= 2:
+            rows.append([parts[0], parts[-1]])
+    
+    if not rows:
+        return pd.DataFrame()
+        
+    df = pd.DataFrame(rows, columns=["date", "amount"])
+    df["date"] = pd.to_datetime(df["date"], errors='coerce')
+    df["amount"] = pd.to_numeric(df["amount"], errors='coerce')
+    return df.dropna().sort_values("date")
 
-st.title("💸 Forecats")
-st.markdown("This UI has **no logic**. It sends data to `last_n_period_model.py`.")
-
-default_input = """
-2025-11-26T00:00:00		-6395029.03
-2025-11-28T00:00:00		   24.24
-2025-12-01T00:00:00		  -37242.68
-2025-12-12T00:00:00		-6467417.19
-2025-12-30T00:00:00		-6651171.38
-2026-01-05T00:00:00		   -1655.79
-2026-01-06T00:00:00		  -68105.95
-2026-01-07T00:00:00		-839934.30
-"""
+# UI Layout
+st.title("Time Series Forecasting Demo")
 
 col1, col2 = st.columns([1, 2])
+
 with col1:
-    raw_text = st.text_area("Input Data", value=default_input, height=300)
+    raw_text = st.text_area("Paste Historical Data", height=300)
 
 if raw_text:
-    df = parse_input(raw_text)
+    df = parse_input_data(raw_text)
+    
     if not df.empty:
         with col2:
-            st.subheader("Settings")
-            # MANUAL FREQUENCY SELECTOR
-            freq = st.selectbox("Frequency", ["Biweekly", "Weekly", "Monthly", "Quarterly"])
+            st.subheader("Model Configuration")
             
-            # PARAMS
-            model_params = {
-                "freq": freq.lower(), 
-                "n_candidates": [3, 4, 6], 
+            freq_option = st.selectbox("Frequency", ["Biweekly", "Weekly", "Monthly", "Quarterly"])
+            
+            params = {
+                "freq": freq_option.lower(),
+                "n_candidates": [3, 4, 6],
                 "adjustmentOption": "nextWorkingDay"
             }
             
-            # Monthly specific inputs
-            if freq == "Monthly":
-                days = st.text_input("Monthly Days (e.g. 1, 10, 20)", "")
-                if days:
-                    d_list = [int(x.strip()) for x in days.split(",")]
-                    model_params["monthlyDays"] = [{"day": d, "percentage": 100/len(d_list)} for d in d_list]
+            if freq_option == "Monthly":
+                days_input = st.text_input("Target Days (comma separated)", "1")
+                if days_input:
+                    days_list = [int(x) for x in days_input.split(",") if x.strip().isdigit()]
+                    if days_list:
+                        pct = 100 / len(days_list)
+                        params["monthlyDays"] = [{"day": d, "percentage": pct} for d in days_list]
 
-        if st.button("Run Backend Logic"):
-            # PREPARE PAYLOAD
-            records = df.to_dict(orient="records")
-            start = df["date"].max() + timedelta(days=1)
-            end = start + timedelta(days=180)
-
+        if st.button("Run Forecast"):
+            # Determine forecast window
+            start_date = df["date"].max() + timedelta(days=1)
+            end_date = start_date + timedelta(days=180)
+            
             try:
-                # --- CALL BACKEND ---
+                # Call backend logic
                 result = backend.run_last_n_forecast(
-                    records=records,
-                    model_params=model_params,
-                    forecast_end_date=end,
-                    holiday_dates=HOLIDAY_DATES,
-                    forecast_start_date=start
+                    records=df.to_dict(orient="records"),
+                    model_params=params,
+                    forecast_end_date=end_date,
+                    holiday_dates=HOLIDAYS,
+                    forecast_start_date=start_date
                 )
                 
-                # DISPLAY RESULTS
                 if result.get("status") == "success":
-                    # Plot
-                    fcst_df = pd.DataFrame({
+                    forecast_df = pd.DataFrame({
                         "date": pd.to_datetime(result["index"]),
                         "amount": result["forecast"]
                     })
+                    
+                    # --- ADD DAY NAMES ---
+                    df["day_name"] = df["date"].dt.day_name()
+                    forecast_df["day_name"] = forecast_df["date"].dt.day_name()
+
+                    # Visualization
                     fig = go.Figure()
-                    fig.add_trace(go.Bar(x=df["date"], y=df["amount"], name="Actual", marker_color='#b71c1c'))
-                    fig.add_trace(go.Bar(x=fcst_df["date"], y=fcst_df["amount"], name="Forecast", marker_color='#ef5350'))
+                    
+                    # Historical Bar
+                    fig.add_trace(go.Bar(
+                        x=df["date"], 
+                        y=df["amount"], 
+                        name="History", 
+                        marker_color='orange',
+                        customdata=df["day_name"],
+                        hovertemplate='%{x|%Y-%m-%d} (%{customdata})<br>Amount: %{y}<extra></extra>'
+                    ))
+                    
+                    # Forecast Bar
+                    fig.add_trace(go.Bar(
+                        x=forecast_df["date"], 
+                        y=forecast_df["amount"], 
+                        name="Forecast", 
+                        marker_color='red',
+                        customdata=forecast_df["day_name"],
+                        hovertemplate='%{x|%Y-%m-%d} (%{customdata})<br>Amount: %{y}<extra></extra>'
+                    ))
+                    
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    st.success(f"Backend Success! Mode: {freq}")
-                    with st.expander("View JSON Response"):
+                    with st.expander("Debug Output"):
                         st.json(result)
                 else:
-                    st.error(f"Backend Failed: {result}")
+                    st.error(f"Model failed: {result.get('status')}")
+                    st.write(result)
+                    
             except Exception as e:
-                st.error(f"Python Error: {e}")
+                st.error(f"Runtime error: {str(e)}")

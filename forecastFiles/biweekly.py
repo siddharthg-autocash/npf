@@ -91,18 +91,7 @@ def _aggregate_collapsed_dates(dates, vals):
 
 
 def run_biweekly_forecast(df, model_params, forecast_start, forecast_end, holiday_set, raw_df=None):
-    """
-    Robust biweekly with debug output.
-    Returns the usual payload plus debug fields:
-      - debug: {
-            "anchors_detected": [...],
-            "raw_lattice": [...],
-            "candidates_before_adjust": [...],
-            "candidates_after_adjust": [...],
-            "excluded_reasons": [ ... ],
-            "base_amount_from_anchors": x or null
-        }
-    """
+
     forecast_start = pd.to_datetime(forecast_start)
     forecast_end = pd.to_datetime(forecast_end)
 
@@ -148,7 +137,14 @@ def run_biweekly_forecast(df, model_params, forecast_start, forecast_end, holida
         except Exception:
             k = 3
         k = max(1, min(k, len(anchors_only)))
-        base_amount = float(anchors_only.sort_values("date")["amount"].iloc[-k:].mean())
+
+        # --- FIX A APPLIED ---
+        # Sort by absolute magnitude descending (whales) instead of date.
+        # This ensures we capture the true recurring amount even if recent anchors were small outliers.
+        top_anchors = anchors_only.assign(mag=anchors_only["amount"].abs()).sort_values("mag", ascending=False).head(k)
+        base_amount = float(top_anchors["amount"].mean())
+        # ---------------------
+
         base_source = "anchors"
     else:
         # fallback to filtered transactions (df)
